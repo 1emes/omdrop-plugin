@@ -981,7 +981,7 @@ cmd_install_driver() {
     return 0
   fi
   apple_broadcom_wifi \
-    || die "This computer has no Apple Broadcom Wi-Fi, so the driver cannot do anything here. Omdrop runs only on Apple Silicon Macs, not in a virtual machine."
+    || die "This computer has no Apple Broadcom Wi-Fi, which Omdrop's own driver needs: it runs only on Apple Silicon Macs, not in a virtual machine. Other Wi-Fi cards need a different radio backend (docs/radio-backend.md)."
   # Into the cache directory, not a temp dir. Three reasons: someone who has
   # just installed a kernel module as root should still have the source they
   # built afterwards, /tmp is tmpfs on this hardware so the clone and the built

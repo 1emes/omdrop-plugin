@@ -5,7 +5,7 @@ description: >
   Mac, iPhone or iPad, receiving from one, or seeing which Apple devices are
   nearby. Triggers: AirDrop, airdrop, "send to my Mac/iPhone", "share this
   link with <device>", nearby Apple devices, omdrop. Provided by the Omdrop
-  plugin (netmojo.omdrop) on Apple Silicon Macs running Omarchy.
+  plugin (netmojo.omdrop) on Macs and PCs running Omarchy.
 ---
 
 # Omdrop: AirDrop from Omarchy
