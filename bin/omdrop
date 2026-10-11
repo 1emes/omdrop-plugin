@@ -54,7 +54,7 @@ PROJ="$(cd "$(dirname "$SELF")/.." && pwd)"
 # A fallback that silently substitutes for the real value is the same class of
 # defect as a status line reporting a state that was never entered, so this one
 # says when it is guessing, and says when the two disagree.
-VERSION_FALLBACK=0.16.0
+VERSION_FALLBACK=0.16.1
 omdrop_version() {
   local dir manifest version= real
   real=$(readlink -f "$0" 2>/dev/null) || real="$0"
@@ -216,7 +216,7 @@ omdrop -- send and receive files with nearby Apple devices
                     .url and .webloc links
   open-link FILE    open a .url or .webloc link in the browser (web links only)
   skill ACTION      install or remove the skill that tells AI agents how to
-                    use omdrop (setup installs it)
+                    use omdrop (nothing else installs it)
   version           the plugin version, for bug reports
 
 Aliases, if you reach for a different word:
@@ -657,8 +657,6 @@ setup_install() {
   # Received links are stored as .url files, and a Mac may send a .webloc.
   # Without this, double-clicking one opens it in a text editor.
   links_install "$plugin" && did=1
-  # So an AI agent asked to AirDrop something knows this command exists.
-  skills_install "$plugin" && did=1
 
   if [[ -z "$(cfg_get name)" ]]; then
     cfg_set name "$(default_name)" \
@@ -696,9 +694,10 @@ cmd_setup() {
   if (( ${#missing[@]} )); then
     printf '\nNot ready to receive yet:\n'
     printf -- '  - %s\n' "${missing[@]}"
-    return 0
+  else
+    printf '\nReady. Turn receiving on from the bar, or run: omdrop on\n'
   fi
-  printf '\nReady. Turn receiving on from the bar, or run: omdrop on\n'
+  skills_offer
 }
 
 # What is missing, in the order it has to be fixed: no receiver library means
@@ -1276,7 +1275,6 @@ cmd_on() {
     local plugin
     plugin=$(plugin_dir) || { echo "omdrop cannot tell where it is installed." >&2; return 1; }
     unit_install "$plugin" || true
-    skills_install "$plugin" >/dev/null 2>&1 || true
     prepare_identity >&2 || return 1
     ensure_tls; (( $? == 2 )) && return 1
     # The unit may write opt-in protocol dumps only here (ReadWritePaths= with
@@ -2430,7 +2428,23 @@ cmd_links() {
 # The skill that tells an AI agent how to use omdrop, linked into the skill
 # directories Omarchy provisions for the agents it launches. Only directories
 # that already exist: a missing one belongs to an agent that is not installed.
+#
+# Only `omdrop skill install` writes these links: never setup, never `on`. They
+# put instructions into other programs' configuration, so they are the user's
+# choice, and a removed skill stays removed.
 SKILL_DIRS=("$HOME/.agents/skills" "$HOME/.claude/skills" "$HOME/.codex/skills" "$HOME/.pi/agent/skills")
+
+# A one-line pointer from `omdrop setup`, when an agent is set up and the
+# skill is not linked for it. It changes nothing.
+skills_offer() {
+  local dir
+  for dir in "${SKILL_DIRS[@]}"; do
+    if [[ -d "$dir" && ! -L "$dir/omdrop" && ! -e "$dir/omdrop" ]]; then
+      printf 'To let AI agents use omdrop, run: omdrop skill install\n'
+      return 0
+    fi
+  done
+}
 
 # An entry named omdrop is replaced only when it is absent, a dangling link,
 # or a link into some plugin's skills/omdrop -- the same rule as the command

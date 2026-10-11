@@ -107,6 +107,22 @@ class SkillTests(unittest.TestCase):
         self.assertNotIn("Removed", result.stdout)
         self.assertTrue(os.path.lexists(self.link))
 
+    def test_setup_leaves_the_skill_to_the_user(self):
+        # The skill writes into other programs' configuration, so only
+        # `omdrop skill install` may link it. Setup points at that command.
+        stubs = self.home / "stubs"
+        stubs.mkdir()
+        for command in ("systemctl", "update-desktop-database", "xdg-mime"):
+            stub = stubs / command
+            stub.write_text("#!/bin/sh\nexit 0\n")
+            stub.chmod(0o755)
+        self.env["PATH"] = f"{stubs}:{os.environ['PATH']}"
+
+        result = self.omdrop("setup")
+
+        self.assertFalse(os.path.lexists(self.link), result.stdout + result.stderr)
+        self.assertIn("omdrop skill install", result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
