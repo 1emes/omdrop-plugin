@@ -204,7 +204,7 @@ rm -rf ~/.omdrop                    # this computer's AirDrop identity
 
 ## Contributing
 
-To report a bug or request a feature, [open an issue](https://github.com/brentkearney/omdrop-plugin/issues). [Pull requests](https://github.com/brentkearney/omdrop-plugin/pulls) are welcome.
+To report a bug or request a feature, [open an issue](https://github.com/brentkearney/omdrop-plugin/issues). [Pull requests](https://github.com/brentkearney/omdrop-plugin/pulls) are welcome; [CONTRIBUTING.md](CONTRIBUTING.md) lists the setup details, hardware evidence, and tests a pull request needs.
 
 ## Trademark
 
