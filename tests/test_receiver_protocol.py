@@ -180,7 +180,8 @@ class ExistingIdentityTests(ReceiverFixture):
         status, body = self.post(conn, "/Ask", ask)
         self.assertEqual(status, 200)
         self.assertEqual(set(plistlib.loads(body)),
-                         {"ReceiverComputerName", "ReceiverModelName", "ReceiverMediaCapabilities"})
+                         {"ReceiverComputerName", "ReceiverModelName",
+                          "ReceiverMediaCapabilities", "IsAirDropable"})
 
         status, _ = self.post(conn, "/Upload", dvzip([("hello.txt", b"hello world\n")]),
                               {"Content-Type": "application/x-dvzip", "TransferID": "T1",

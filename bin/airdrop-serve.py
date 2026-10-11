@@ -762,6 +762,7 @@ class Handler(BaseHTTPRequestHandler):
             'ReceiverMediaCapabilities': MEDIA_CAPABILITIES,
             'ReceiverComputerName': NAME,
             'ReceiverModelName': MODEL,
+            'IsAirDropable': True,
         }
         # The Apple ID validation record, when this machine has one, is what
         # lets a Contacts Only sender recognise us.
@@ -841,6 +842,7 @@ class Handler(BaseHTTPRequestHandler):
             'ReceiverMediaCapabilities': MEDIA_CAPABILITIES,
             'ReceiverComputerName': NAME,
             'ReceiverModelName': MODEL,
+            'IsAirDropable': True,
         }, fmt=plistlib.FMT_BINARY)
         write_debug(resp, 'receive_ask_response.plist')
         self.answer(resp)
