@@ -14,20 +14,16 @@ Describe what the change does, then provide each of the following that applies.
 
 ### Your setup
 
-Paste the output of these commands:
+Paste the whole output of this command. It reports the computer's model, Wi-Fi chip, kernel, radio backend, Omdrop's version and readiness, the identity in use, the Wi-Fi firmware, and `awdl0`. omdrop-awdl's hardware-report form asks for the same details.
 
 ```bash
-omdrop version
-omdrop doctor --json
-omdrop identity
-uname -r
-lspci -nn | grep -i network                     # your Wi-Fi chip
-pacman -Q brcmfmac-awdl-dkms omdrop-owl 2>&1    # your radio backend
+{ tr -d '\0' < /proc/device-tree/model 2>/dev/null || cat /sys/class/dmi/id/product_name; echo; lspci -nn | grep -i network; uname -r; pacman -Q brcmfmac-awdl-dkms omdrop-owl; omdrop --version; omdrop doctor --json; omdrop identity; journalctl -k -b | grep -m1 'brcmfmac.*Firmware:'; ip -br link show awdl0; } 2>&1
 ```
+
+One of the two radio backend packages is reported as not found; that's expected.
 
 Also give:
 
-- The computer's model.
 - Each Apple device involved: its model and OS version, such as "iPhone 15 Pro, iOS 26.1".
 - The visibility mode on each side (Everyone or Contacts Only).
 - For panel or QML changes: `pacman -Q qt6-declarative quickshell` and your Omarchy version.
