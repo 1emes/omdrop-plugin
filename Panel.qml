@@ -3,6 +3,7 @@ import QtQuick.Layouts
 import Quickshell
 import Quickshell.Io
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 // omdrop -- receive files from nearby Apple devices.
@@ -80,8 +81,8 @@ Panel {
   // Shipped beside this file so the widget works without anything on PATH.
   readonly property string cli: Qt.resolvedUrl("bin/omdrop").toString().replace("file://", "")
 
-  readonly property color foreground: bar ? bar.foreground : Color.foreground
-  readonly property color urgent: bar ? bar.urgent : Color.urgent
+  readonly property color foreground: bar ? bar.foreground : Commons.Color.foreground
+  readonly property color urgent: bar ? bar.urgent : Commons.Color.urgent
   readonly property color dim: Qt.darker(foreground, 1.55)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
 
@@ -1229,7 +1230,7 @@ Panel {
               Rectangle {
                 anchors.fill: parent
                 visible: senderMouse.containsMouse
-                color: Style.hoverFillFor(root.foreground, Color.accent)
+                color: Style.hoverFillFor(root.foreground, Commons.Color.accent)
               }
               Text {
                 id: senderText
@@ -1596,7 +1597,7 @@ Panel {
           anchors.top: parent.top
           width: Style.space(20); height: width
           radius: width / 2
-          color: cancelMouse.containsMouse ? Style.hoverFillFor(root.foreground, Color.accent) : "transparent"
+          color: cancelMouse.containsMouse ? Style.hoverFillFor(root.foreground, Commons.Color.accent) : "transparent"
 
           Text {
             anchors.centerIn: parent

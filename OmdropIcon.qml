@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Shapes
 import qs.Commons
+import qs.Commons as Commons
 
 // A drop: a triangle pointing down into the box it lands in. Nothing in a Nerd
 // Font draws this, and an SVG asset would not follow the bar's foreground
@@ -10,7 +11,7 @@ import qs.Commons
 Item {
   id: root
 
-  property color color: Color.foreground
+  property color color: Commons.Color.foreground
   property real iconSize: Style.font.icon
   property bool crossed: false
 

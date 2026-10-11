@@ -5,6 +5,7 @@ import QtQuick.Shapes
 import Quickshell
 import Quickshell.Io
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 Item {
@@ -12,7 +13,7 @@ Item {
   property var peers: []
   property bool scanning: false
   property bool muted: false
-  property color foreground: Color.foreground
+  property color foreground: Commons.Color.foreground
   property string fontFamily: Style.font.family
   property string soundDir: ""
   signal muteToggled()
@@ -343,7 +344,7 @@ Item {
         width: label.width + Style.space(8); height: label.height + Style.space(6)
         radius: Style.space(4)
         visible: contact.hot && label.visible
-        color: Style.hoverFillFor(root.foreground, Color.accent)
+        color: Style.hoverFillFor(root.foreground, Commons.Color.accent)
       }
       Text {
         id: label
