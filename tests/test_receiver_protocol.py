@@ -168,7 +168,9 @@ class ExistingIdentityTests(ReceiverFixture):
         self.assertEqual(answer["ReceiverModelName"], MODEL)
         # Without the record a Contacts Only sender cannot recognise us.
         self.assertEqual(answer["ReceiverRecordData"], self.record)
-        self.assertEqual(json.loads(answer["ReceiverMediaCapabilities"]), {"Version": 1})
+        caps = json.loads(answer["ReceiverMediaCapabilities"])
+        self.assertEqual(caps["Version"], 3)
+        self.assertIn("Codecs", caps)
 
     def test_ask_then_upload_on_one_connection_stores_the_files(self):
         conn = self.connection()

@@ -624,10 +624,10 @@ def store_link(url, dest):
     return name
 
 
-# ReceiverMediaCapabilities, sent in both the Discover and the Ask answer:
-# version 1 and no codecs or containers, which makes the sender convert to
-# the legacy formats (JPEG rather than HEIF). The key's presence is the point.
-MEDIA_CAPABILITIES = json.dumps({'Version': 1}).encode()
+# ReceiverMediaCapabilities, sent in both the Discover and the Ask answer.
+# Version 3 codec/profile table captured from a MacBook Pro response; keeping
+# the captured payload avoids advertising the codec-free legacy-format stub.
+MEDIA_CAPABILITIES = b'{"SupportsAdjustmentBaseResources":true,"Version":3,"Codecs":{"hvc1":{"Profiles":{"VTIsHDRAllowedOnDevice":true,"VTSupportedProfiles":[1,2,3,4],"VTDoViIsHardwareAccelerated":true,"VTDoViSupportedLevels":["01","02","03","04","05","06","07","08","09"],"VTPerProfileSupport":{"3":{"VTMaxPlaybackLevel":186,"VTIsHardwareAccelerated":true,"VTMaxDecodeLevel":186},"1":{"VTMaxPlaybackLevel":186,"VTIsHardwareAccelerated":true,"VTMaxDecodeLevel":186},"4":{"VTMaxPlaybackLevel":186,"VTIsHardwareAccelerated":true,"VTMaxDecodeLevel":186},"2":{"VTMaxPlaybackLevel":186,"VTIsHardwareAccelerated":true,"VTMaxDecodeLevel":186}},"VTDoViSupportedProfiles":["05","08"]}},"CodecSupport":{"VTIsHDRAllowedOnDevice":true,"VTCodecSupportDict":{"apcs":{"VTIsHardwareAccelerated":true},"hvc1":{"VTIsHDRAllowedOnDevice":true,"VTPerProfileSupport":{"3":{"VTMaxPlaybackLevel":186,"VTIsHardwareAccelerated":true,"VTMaxDecodeLevel":186},"1":{"VTMaxPlaybackLevel":186,"VTIsHardwareAccelerated":true,"VTMaxDecodeLevel":186},"4":{"VTMaxPlaybackLevel":186,"VTIsHardwareAccelerated":true,"VTMaxDecodeLevel":186},"2":{"VTMaxPlaybackLevel":186,"VTIsHardwareAccelerated":true,"VTMaxDecodeLevel":186}},"VTSupportedProfiles":[1,2,3,4]},"apcn":{"VTIsHardwareAccelerated":true},"apch":{"VTIsHardwareAccelerated":true},"apco":{"VTIsHardwareAccelerated":true},"ap4x":{"VTIsHardwareAccelerated":true},"ap4h":{"VTIsHardwareAccelerated":true}}}},"ContainerFormats":{"public.heif-standard":{"HeifSubtypes":["public.avci","public.avif","public.heic","public.heics","public.heif"]}},"Vendor":{"com.apple":{"LivePhotoFormatVersion":"1","AssetBundleFormatVersion":"1"}}}'
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -759,9 +759,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
         write_debug(body, 'receive_discover_request.plist')
         answer = {
-            'ReceiverMediaCapabilities': MEDIA_CAPABILITIES,
-            'ReceiverComputerName': NAME,
             'ReceiverModelName': MODEL,
+            'ReceiverComputerName': NAME,
+            'ReceiverMediaCapabilities': MEDIA_CAPABILITIES,
             'IsAirDropable': True,
         }
         # The Apple ID validation record, when this machine has one, is what
@@ -839,9 +839,9 @@ class Handler(BaseHTTPRequestHandler):
                 stored = store_link(item, DEST)
                 logging.info('link stored as %s -> %s', stored, item)
         resp = plistlib.dumps({
-            'ReceiverMediaCapabilities': MEDIA_CAPABILITIES,
-            'ReceiverComputerName': NAME,
             'ReceiverModelName': MODEL,
+            'ReceiverComputerName': NAME,
+            'ReceiverMediaCapabilities': MEDIA_CAPABILITIES,
             'IsAirDropable': True,
         }, fmt=plistlib.FMT_BINARY)
         write_debug(resp, 'receive_ask_response.plist')
