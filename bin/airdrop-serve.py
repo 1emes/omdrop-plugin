@@ -416,6 +416,109 @@ def _read_chunked(rfile, writer, deadline):
             raise RequestBodyError('chunk data missing CRLF')
 
 
+class BodyComplete(Exception):
+    """The upload went quiet, but what arrived is already a whole archive."""
+
+
+def archive_is_complete(raw, byte_limit):
+    """True when raw, from its start, decodes to a CPIO archive that reads to
+    its end. Used on a stalled upload only, so a full decode is affordable."""
+    pos = raw.tell()
+    try:
+        raw.flush()
+        with tempfile.TemporaryFile(dir=DEST) as cpio:
+            decode_dvzip(raw, cpio, byte_limit)
+            # Only an archive that reached CPIO's end-of-archive entry is
+            # whole. libarchive reads an empty stream, or one cut cleanly
+            # between members, as a valid archive, and accepting either would
+            # silently drop the files that never arrived.
+            size = cpio.tell()
+            cpio.seek(max(0, size - 1024))
+            if b'TRAILER!!!' not in cpio.read():
+                return False
+            cpio.seek(0)
+            members = 0
+            with libarchive.stream_reader(cpio) as archive:
+                for entry in archive:
+                    members += 1
+                    for _ in entry.get_blocks():
+                        pass
+        return members > 0
+    except Exception:
+        return False
+    finally:
+        raw.seek(pos)
+
+
+class PatientReader:
+    """rfile, read in short waits so a stall can be looked at while it lasts.
+
+    Over exclusive-mode AWDL (Intel Wi-Fi) the iPhone sometimes delivers every
+    byte of an upload and then never sends the chunked body's closing "0"
+    chunk: its progress bar sits full, and the upload used to die on the idle
+    timeout 25 KB "short" (2026-10-10, 4 of 7 receives of a 34 MB video). After
+    each quiet STEP seconds this asks is_complete(); when the archive is whole
+    it raises BodyComplete so the upload is stored and answered. Otherwise it
+    keeps waiting, up to READ_IDLE_TIMEOUT_SECONDS of silence as before."""
+
+    STEP = 3
+
+    def __init__(self, rfile, sock, is_complete):
+        self.rfile = rfile
+        self.sock = sock
+        self.is_complete = is_complete
+
+    def _call(self, fn, *args):
+        idle = 0
+        checked = False
+        self.sock.settimeout(self.STEP)
+        try:
+            while True:
+                try:
+                    return fn(*args)
+                except socket.timeout:
+                    # SocketIO refuses every read after a timeout. Nothing was
+                    # consumed by the read that timed out, so clear the flag
+                    # and carry on (CPython socket.SocketIO, private).
+                    self.rfile.raw._timeout_occurred = False
+                    idle += self.STEP
+                    if not checked:
+                        checked = True
+                        if self.is_complete():
+                            raise BodyComplete()
+                    if idle >= READ_IDLE_TIMEOUT_SECONDS:
+                        raise
+        finally:
+            self.sock.settimeout(READ_IDLE_TIMEOUT_SECONDS)
+
+    # readline and read are built on peek, never on rfile's own: those lose
+    # the bytes they had gathered when a wait times out partway (tested), and
+    # peek only fills the buffer, so a timed-out wait consumes nothing.
+    def _take(self, size, stop_at_newline):
+        out = b''
+        while len(out) < size:
+            ready = self._call(self.rfile.peek, 1)
+            if not ready:
+                break
+            want = size - len(out)
+            if stop_at_newline:
+                i = ready.find(b'\n', 0, want)
+                if i >= 0:
+                    out += self.rfile.read(i + 1)
+                    break
+            out += self.rfile.read(min(len(ready), want))
+        return out
+
+    def readline(self, size=-1):
+        return self._take(size if size >= 0 else 1 << 30, True)
+
+    def read(self, size):
+        return self._take(size, False)
+
+    def read1(self, size):
+        return self._call(self.rfile.read1, size)
+
+
 def read_request_body(rfile, headers, target, limit, *, check_disk=False,
                       plan=None, deadline=None):
     """Stream one framed request body into target under byte and time limits."""
@@ -872,9 +975,21 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_response_only(100)
                 self.end_headers()
             with tempfile.TemporaryFile(dir=DEST) as raw:
-                wire_bytes = read_request_body(
-                    self.rfile, self.headers, raw, receive_budget.byte_limit,
-                    check_disk=True, plan=plan, deadline=deadline)
+                patient = PatientReader(
+                    self.rfile, self.request,
+                    lambda: archive_is_complete(raw, receive_budget.byte_limit))
+                try:
+                    wire_bytes = read_request_body(
+                        patient, self.headers, raw, receive_budget.byte_limit,
+                        check_disk=True, plan=plan, deadline=deadline)
+                except BodyComplete:
+                    raw.flush()
+                    wire_bytes = raw.tell()
+                    # The closing chunk never came, so this connection's
+                    # framing is unknown: answer, then close it.
+                    self.close_connection = True
+                    logging.warning('upload %s: no closing chunk after %d s, but the '
+                                    'archive is complete; storing it', tid, PatientReader.STEP)
                 raw.seek(0)
                 logging.info('upload %s: %d bytes dvzip (TotalBytes %s)',
                              tid, wire_bytes, self.headers.get('TotalBytes'))

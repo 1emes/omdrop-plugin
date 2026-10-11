@@ -161,6 +161,73 @@ class RequestBodyLimitTests(unittest.TestCase):
             self.assertLessEqual(target.tell(), 31)
 
 
+class StalledUploadTests(unittest.TestCase):
+    """An iPhone that sends the whole body but never the closing 0 chunk."""
+
+    def setUp(self):
+        self.ns = receiver_namespace()
+        self.dest = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dest.cleanup)
+        self.ns["DEST"] = self.dest.name
+        self.ns["PatientReader"].STEP = 0.2
+        self.ns["READ_IDLE_TIMEOUT_SECONDS"] = 0.8
+        self.body = stored_dvzip(cpio_bytes([("clip.mov", b"x" * 200000)]))
+
+    def reader(self, raw):
+        a, b = socket.socketpair()
+        self.addCleanup(a.close)
+        self.addCleanup(b.close)
+        check = lambda: self.ns["archive_is_complete"](raw, 10 ** 9)
+        return self.ns["PatientReader"](a.makefile("rb"), a, check), b
+
+    def read(self, raw, reader):
+        return self.ns["read_request_body"](
+            reader, {}, raw, 10 ** 9, plan=("chunked", None))
+
+    def test_partial_line_survives_a_stall(self):
+        reader, peer = self.reader(io.BytesIO())
+
+        def send():
+            peer.sendall(b"ab")
+            time.sleep(0.5)
+            peer.sendall(b"cd\n")
+        threading.Thread(target=send).start()
+
+        self.assertEqual(reader.readline(100), b"abcd\n")
+
+    def test_complete_archive_without_closing_chunk_is_accepted(self):
+        with tempfile.TemporaryFile() as raw:
+            reader, peer = self.reader(raw)
+            peer.sendall(b"%x\r\n" % len(self.body) + self.body + b"\r\n")
+
+            with self.assertRaises(self.ns["BodyComplete"]):
+                self.read(raw, reader)
+
+    def test_archive_cut_between_members_is_not_complete(self):
+        whole = cpio_bytes([("a.txt", b"a" * 600), ("b.txt", b"b" * 600)])
+        # The first member ends where the second member's header starts.
+        cut = whole.index(b"070707", 6)
+        with tempfile.TemporaryFile() as raw:
+            raw.write(stored_dvzip(whole[:cut]))
+            self.assertFalse(self.ns["archive_is_complete"](raw, 10 ** 9))
+            raw.seek(0)
+            raw.truncate()
+            raw.write(stored_dvzip(whole))
+            self.assertTrue(self.ns["archive_is_complete"](raw, 10 ** 9))
+
+    def test_empty_upload_is_not_complete(self):
+        self.assertFalse(self.ns["archive_is_complete"](io.BytesIO(), 10 ** 9))
+
+    def test_incomplete_archive_still_times_out(self):
+        with tempfile.TemporaryFile() as raw:
+            reader, peer = self.reader(raw)
+            half = self.body[: len(self.body) // 2]
+            peer.sendall(b"%x\r\n" % len(half) + half + b"\r\n")
+
+            with self.assertRaises(socket.timeout):
+                self.read(raw, reader)
+
+
 class ArchiveExtractionLimitTests(unittest.TestCase):
     def setUp(self):
         self.ns = receiver_namespace()
