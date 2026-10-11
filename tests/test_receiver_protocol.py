@@ -169,6 +169,7 @@ class ExistingIdentityTests(ReceiverFixture):
         self.assertEqual(answer["ReceiverModelName"], MODEL)
         # Without the record a Contacts Only sender cannot recognise us.
         self.assertEqual(answer["ReceiverRecordData"], self.record)
+        self.assertIs(answer["IsAirDropable"], True)
         caps = json.loads(answer["ReceiverMediaCapabilities"])
         self.assertEqual(caps["Version"], 3)
         self.assertIn("Codecs", caps)
