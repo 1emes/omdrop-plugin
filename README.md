@@ -1,14 +1,19 @@
 # Omdrop
 
-AirDrop for [Omarchy](https://omarchy.org) Apple Silicon Macs with Broadcom WiFi chips (M1 & M2 machines). Send and receive files with nearby iPhones, iPads, and Macs, in both Everyone and Contacts Only mode.
+AirDrop for [Omarchy](https://omarchy.org), on Macs and PCs. Send and receive files with nearby iPhones, iPads, and Macs, in both Everyone and Contacts Only mode.
 
-![Omdrop: AirDrop for Omarchy on Apple Silicon. The panel lists nearby devices above a radar of their signal strength.](preview.png)
+![Omdrop: AirDrop for Omarchy, on Macs and PCs. The panel lists nearby devices above a radar of their signal strength.](preview.png)
 
 ## Requirements
-- **A `brcmfmac` driver with AWDL enabled.** The plugin installs one from [omdrop-awdl](https://github.com/brentkearney/omdrop-awdl) on first use.
-- **Broadcom Wi-Fi whose firmware implements AWDL**: see [Hardware Compatibility](https://github.com/brentkearney/omdrop-awdl/blob/main/README.md#hardware-compatibility) on the driver project.
 
-For AirDrop on other hardware, see [OpenDrop](https://github.com/seemoo-lab/opendrop) and [owl](https://github.com/seemoo-lab/owl), which implement AWDL in userspace over monitor mode. [LocalSend](https://localsend.org), which ships with Omarchy, is an open alternative that needs its app on every device.
+Omdrop needs a radio backend: the package that gives this computer an `awdl0` interface for AWDL, the Wi-Fi link AirDrop runs on. Install one of these:
+
+- **Apple Silicon Macs with Broadcom Wi-Fi (M1 and M2)**: [omdrop-awdl](https://github.com/brentkearney/omdrop-awdl), a `brcmfmac` driver that uses the AWDL built into the Wi-Fi firmware. The plugin installs it on first use. See its [Hardware Compatibility](https://github.com/brentkearney/omdrop-awdl/blob/main/README.md#hardware-compatibility).
+- **PCs with other Wi-Fi cards**: [omdrop-owl](https://github.com/t4t5/omdrop-owl), which runs AWDL in software through [OWL](https://github.com/seemoo-lab/owl). Install it before the plugin. Its [Supported hardware](https://github.com/t4t5/omdrop-owl#supported-hardware) table lists the cards that work; on some, Wi-Fi is off while Omdrop is visible.
+
+The two packages conflict, so a computer has one or the other. [docs/radio-backend.md](docs/radio-backend.md) describes what a backend provides.
+
+[LocalSend](https://localsend.org), which ships with Omarchy, is an open alternative that needs its app on every device.
 
 ## Install
 
@@ -20,7 +25,7 @@ Answer yes when it asks to enable the plugin. The icon, a triangle dropping into
 
 On first use, the panel opens a terminal that asks for your password to:
 
-- Build and install the driver, pinned to an exact commit, and install `python-libarchive-c` from the official Arch repositories if it is missing. It is the receiver's only library outside Python's standard library.
+- Install `python-libarchive-c` from the official Arch repositories if it is missing. It is the receiver's only library outside Python's standard library. On a Mac, the same step builds and installs the driver, pinned to an exact commit.
 - Add one firewall rule: TCP 8771 on `awdl0`, from IPv6 link-local addresses only.
 
 The first time you turn Omdrop on, it finishes setting up and installs the `omdrop` command at `~/.local/bin/omdrop`. To get the command before that, run `~/.config/omarchy/plugins/netmojo.omdrop/bin/omdrop setup`. Run `omdrop --version` to include the version in bug reports.
@@ -30,10 +35,10 @@ The first time you turn Omdrop on, it finishes setting up and installs the `omdr
 ```bash
 omarchy plugin update netmojo.omdrop   # fetch the latest release
 omarchy-restart-shell                  # the bar loads the new panel only after a shell restart
-omdrop install-driver                  # rebuild the driver if the new release needs a newer one
+omdrop install-driver                  # on a Mac, rebuild the driver if the new release needs a newer one
 ```
 
-`omdrop install-driver` does nothing when the installed driver is already current. If Omdrop is on while you upgrade, turn it off and on again: the receiver keeps running the old version until it restarts.
+`omdrop install-driver` does nothing when everything it installs is already current. On a PC, update the radio backend through its own package: `omdrop install-driver` leaves it alone. If Omdrop is on while you upgrade, turn it off and on again: the receiver keeps running the old version until it restarts.
 
 ## Receive files
 
@@ -84,7 +89,7 @@ omdrop send --verbose ~/photo.jpg # protocol log, for bug reports
 
 `start`, `stop`, `list`, and `vis` are aliases for `on`, `off`, `peers`, and `visibility`. Run `omdrop help` for the rest.
 
-`omdrop send` accepts `http` and `https` links, including several links in one transfer. A `.webloc` or `.url` file containing a web link is sent as that link so the recipient can open it in a browser, rather than as a downloaded shortcut. Other shortcut files remain files. Send links and files separately. If the installed sender lacks link support, update it with `omdrop install-driver`.
+`omdrop send` accepts `http` and `https` links, including several links in one transfer. A `.webloc` or `.url` file containing a web link is sent as that link so the recipient can open it in a browser, rather than as a downloaded shortcut. Other shortcut files remain files. Send links and files separately. If the installed sender lacks link support, update the radio backend: `omdrop install-driver` on a Mac, or the backend's own package on a PC.
 
 For a named recipient, `omdrop send` searches for up to two minutes and reports devices as they answer. If Omdrop is off, it turns Omdrop on for the usual 10-minute window first; a send without a name needs Omdrop on already. Names match without regard to case; an exact name takes priority over a substring match. If several devices match, including duplicate exact names, choose one with `--to ADDRESS`. An unfinished lookup sends nothing, even if a matching name has already answered.
 
@@ -172,9 +177,9 @@ What the cache does and doesn't protect against:
 
 ## Privileges
 
-The radio helper, `/usr/lib/omdrop/omdrop-discoverable`, runs as root through `pkexec`, because configuring AWDL needs vendor commands and raw frame transmission. The polkit action `org.omarchy.omdrop.discover` covers only that root-owned path. It needs no password from your own active session, and an administrator's password from remote or inactive sessions. The driver package installs both.
+The radio helper, `/usr/lib/omdrop/omdrop-discoverable`, runs as root through `pkexec`, because configuring AWDL needs root: vendor commands to the Broadcom firmware, or monitor-mode frame injection with OWL. The radio backend package installs the helper and a polkit action that covers only that root-owned path: `org.omarchy.omdrop.discover` from omdrop-awdl, `io.github.t4t5.omdrop-owl.discover` from omdrop-owl. It needs no password from your own active session, and an administrator's password from remote or inactive sessions.
 
-The receiver runs as you, so received files are yours. The firewall rule is added with `sudo ufw` in the install terminal, which normally reuses the driver install's authentication.
+The receiver runs as you, so received files are yours. The firewall rule is added with `sudo ufw` in the install terminal, which normally reuses that terminal's earlier authentication.
 
 The AirDrop identity is kept in `~/.omdrop/keys`, or in 1Password; see [Your AirDrop identity](#your-airdrop-identity). If `~/.opendrop/keys` exists and `~/.omdrop` doesn't, Omdrop copies it there once and leaves the original in place for OpenDrop.
 
@@ -187,7 +192,7 @@ omdrop firewall remove
 omdrop links remove
 omdrop skill remove
 omarchy plugin remove netmojo.omdrop
-sudo pacman -R brcmfmac-awdl-dkms
+sudo pacman -R brcmfmac-awdl-dkms   # the radio backend on a Mac; omdrop-owl on a PC
 omdrop identity lock                # clear a cached identity
 rm -rf ~/.omdrop                    # this computer's AirDrop identity
 ```
