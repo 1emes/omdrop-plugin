@@ -170,9 +170,7 @@ with open(f'/sys/class/net/{args.iface}/address') as f:
 class ThreadingHTTPServerV6(ThreadingHTTPServer):
     address_family = socket.AF_INET6
     daemon_threads = True
-    # Bound without SO_REUSEADDR, as this receiver always has been: a port
-    # still held is waited out by bind_server() below.
-    allow_reuse_address = False
+    allow_reuse_address = True
 
     # A connection that opens and then carries no request is the signature of a
     # sender that gave up or a TLS handshake we lost -- invisible in the
@@ -191,15 +189,6 @@ class ThreadingHTTPServerV6(ThreadingHTTPServer):
         self.live.discard(request)
         super().shutdown_request(request)
 
-    # A sender keeps its TLS session open after a transfer, and when this
-    # process stops the kernel closes that session with a FIN. An iPhone that
-    # has already left the AWDL link never acknowledges it, so the socket sits
-    # in FIN_WAIT_1 holding port 8771 for minutes -- and the next start cannot
-    # bind, which is exactly what "turn it off and on again" does after a
-    # transfer (observed 2026-09-18 03:11Z, 23 restart attempts).
-    #
-    # A reset costs nothing here: the transfer is over, and the peer is either
-    # gone or about to be told we are.
     def reset_sessions(self):
         for sock in list(self.live):
             try:
