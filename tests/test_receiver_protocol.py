@@ -193,6 +193,42 @@ class ExistingIdentityTests(ReceiverFixture):
         self.assertEqual(status, 200)
         self.assertEqual((self.out / "hello.txt").read_bytes(), b"hello world\n")
 
+    def upload_without_closing_chunk(self, tid, name, payload):
+        """Send a whole /Upload but not its final 0-chunk; return the socket
+        once the receiver has answered, and the status it answered."""
+        body = dvzip([(name, payload)])
+        raw = socket.create_connection(("::1", self.port), timeout=20)
+        tls = self.context().wrap_socket(raw)
+        self.addCleanup(tls.close)
+        tls.sendall(b"POST /Upload HTTP/1.1\r\nHost: x\r\nContent-Type: application/x-dvzip\r\n"
+                    b"TransferID: %s\r\nTransfer-Encoding: chunked\r\n\r\n" % tid.encode()
+                    + b"%x\r\n%s\r\n" % (len(body), body))
+        return tls, tls.recv(64).split(b" ", 2)[1]
+
+    def test_a_closing_chunk_sent_after_an_early_answer_gets_a_clean_close(self):
+        # A Mac's sharingd sends the final 0-chunk only once it has the
+        # answer. If the receiver closes with that chunk unread or still on
+        # its way, the kernel answers it with an RST, and the Mac reports the
+        # stored transfer as failed (2026-10-11, macOS 27:
+        # unexpected-NSPOSIXErrorDomain-54).
+        payload = os.urandom(200_000)
+        tls, status = self.upload_without_closing_chunk("T-lateterm", "late.bin", payload)
+        self.assertEqual(status, b"200")
+        tls.sendall(b"0\r\n\r\n")
+        while tls.recv(4096):         # raises ConnectionResetError on an RST
+            pass
+        self.assertEqual((self.out / "late.bin").read_bytes(), payload)
+
+    def test_a_sender_that_waits_for_the_close_is_not_kept_waiting(self):
+        # An iPhone keeps the connection open after the answer and waits for
+        # the receiver to close it; the receiver closes once nothing arrives.
+        tls, status = self.upload_without_closing_chunk("T-keepalive", "kept.bin", b"k" * 1000)
+        self.assertEqual(status, b"200")
+        answered = time.monotonic()
+        while tls.recv(4096):
+            pass
+        self.assertLess(time.monotonic() - answered, 5)
+
     def test_everyone_mode_serves_a_sender_presenting_a_self_signed_certificate(self):
         # Asking for a certificate would verify it, and a sender whose
         # certificate does not chain to Apple would be refused at TLS.

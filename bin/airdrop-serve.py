@@ -242,6 +242,8 @@ INITIAL_READ_SECONDS = 60
 # upload slot is held meanwhile.
 UPLOAD_WAIT_SECONDS = 60
 MIN_READ_BYTES_PER_SECOND = 64 * KIB
+DRAIN_QUIET_SECONDS = 1         # after an upload answered without its closing
+DRAIN_LIMIT_SECONDS = 10        # chunk: see drain_before_close
 MAX_METADATA_BYTES = 1 * MIB
 MAX_ARCHIVE_MEMBERS = 512
 MIN_FREE_BYTES = 1 * GIB
@@ -1026,6 +1028,7 @@ class Handler(BaseHTTPRequestHandler):
         tid = safe_name(self.headers.get('TransferID', ''), 'upload')
         deadline = ReadDeadline()
         plan = None
+        ended_early = False
         try:
             receive_budget = ReceiveBudget(DEST, MAX_RECEIVE_PERCENT)
             plan = body_plan(self.headers, receive_budget.byte_limit)
@@ -1050,6 +1053,7 @@ class Handler(BaseHTTPRequestHandler):
                     # The closing chunk never came, so this connection's
                     # framing is unknown: answer, then close it.
                     self.close_connection = True
+                    ended_early = True
                     logging.warning('upload %s: no closing chunk after %d s, but the '
                                     'archive is complete; storing it', tid, PatientReader.STEP)
                 raw.seek(0)
@@ -1079,6 +1083,32 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header('Content-Length', '0')
         self.end_headers()
+        if ended_early:
+            self.drain_before_close()
+
+    def drain_before_close(self):
+        """Read what the sender still has in flight before closing.
+
+        A Mac's sharingd sends the closing chunk only after it has our answer.
+        Closing with that chunk unread, or with it still on the way, makes the
+        kernel send a TCP RST, and a Mac that sees the reset reports the stored
+        transfer as failed (sharingd: unexpected-NSPOSIXErrorDomain-54). An
+        iPhone instead keeps the connection open and waits for us to close.
+        So read until the sender closes or goes quiet for DRAIN_QUIET_SECONDS,
+        and never for longer than DRAIN_LIMIT_SECONDS in all.
+        """
+        try:
+            self.wfile.flush()
+        except OSError:
+            return
+        end = time.monotonic() + DRAIN_LIMIT_SECONDS
+        try:
+            while (left := end - time.monotonic()) > 0:
+                self.request.settimeout(min(DRAIN_QUIET_SECONDS, left))
+                if not self.rfile.read1(IO_CHUNK_BYTES):
+                    return              # the sender closed: so can we
+        except (OSError, ValueError):   # quiet (socket.timeout), or gone
+            return
 
     def log_message(self, fmt, *a):
         logging.info('%s %s', self.client_address[0], fmt % a)
