@@ -1,0 +1,73 @@
+# Contributing to Omdrop
+
+Bug reports and pull requests are welcome. Omdrop's behaviour depends on Apple devices, Wi-Fi hardware, and radio backends that reviewers often can't reproduce, so a pull request is reviewed on the evidence it includes. This page lists what to include.
+
+## What a pull request needs
+
+Describe what the change does, then provide each of the following that applies.
+
+### The problem
+
+- What happened, and what you expected instead.
+- How often it happens: for example, "4 of 7 transfers ended in a 408".
+- Which claims you measured and which you inferred. "The iPhone never sends the closing chunk" needs a log line or capture. Without one, say it's a guess.
+
+### Your setup
+
+Paste the whole output of this command. It reports the computer's model, Wi-Fi chip, kernel, radio backend, Omdrop's version and readiness, the identity in use, the Wi-Fi firmware, and `awdl0`. omdrop-awdl's hardware-report form asks for the same details.
+
+```bash
+{ tr -d '\0' < /proc/device-tree/model 2>/dev/null || cat /sys/class/dmi/id/product_name; echo; lspci -nn | grep -i network; uname -r; pacman -Q brcmfmac-awdl-dkms omdrop-owl; omdrop --version; omdrop doctor --json; omdrop identity; journalctl -k -b | grep -m1 'brcmfmac.*Firmware:'; ip -br link show awdl0; } 2>&1
+```
+
+One of the two radio backend packages is reported as not found; that's expected.
+
+Also give:
+
+- Each Apple device involved: its model and OS version, such as "iPhone 15 Pro, iOS 26.1".
+- The visibility mode on each side (Everyone or Contacts Only).
+- For panel or QML changes: `pacman -Q qt6-declarative quickshell` and your Omarchy version.
+
+### Evidence from real hardware
+
+If the change affects how Omdrop talks to an Apple device, show the behaviour before and after the change on real hardware. Paste text, not screenshots, and include the lines that show the behaviour you describe.
+
+| What changed | Where to get the evidence |
+|---|---|
+| Receiving | `journalctl --user -u airdrop-receiver --since "15 min ago"`. Useful lines include `ask from …`, `upload …: decoded to N bytes, magic …`, `stored …`, and the HTTP status of each request. |
+| Sending | The output of `omdrop send --verbose …`. It also writes protocol dumps to `$XDG_RUNTIME_DIR/omdrop/debug`, with validation records and certificates replaced by their size. |
+| The radio | The radio backend's log. For omdrop-awdl, that's `/run/awdl-discoverable/log` during the window. |
+| A new content type, header, or protocol field | The receiver log line showing what the device actually sent. A test that builds the input itself shows that the code accepts it, not that a real device sends it. |
+
+### Tests
+
+- Run `python3 -m unittest discover -s tests` on current `main` and on your branch. Report both counts.
+- Name every test that fails, and say whether it also fails on `main`.
+- Add a regression test that fails without your change and passes with it. Use real sockets and real TLS where the existing tests do. A test must not depend on the machine it runs on.
+
+### Receiver changes
+
+The receiver accepts connections from any nearby device in Everyone mode, and an `/Upload` needs no accepted Ask first. For a change to the receiver, explain:
+
+- What a hostile sender can do with the new code path: for example, trickle bytes, stall, or send a malformed body.
+- What it costs: CPU, memory, disk, and how often that cost can be triggered.
+- That the existing size, member, and disk limits still apply.
+
+### Your branch
+
+- Base it on current `main`, and rebase when `main` moves. Git can merge two changes to the same file without a conflict and still break both, so run the tests again after rebasing.
+- Make one change per pull request.
+- Author your commits as yourself. Add someone else as an author or co-author only with their agreement.
+
+## Before you share logs
+
+Logs and dumps can identify people. Before posting:
+
+- **Remove device names.** Lines such as `ask from …` and `serving … as …` carry device names, which often include a person's name.
+- **Remove contact details.** Apple ID email addresses, phone numbers, and the known-senders list.
+- **Remove network identifiers.** Your router's MAC address and network name. AWDL addresses rotate each session and are fine to share.
+- **Never share identity material.** That includes anything in `~/.omdrop/keys`, `validation_record.cms`, 1Password items, and the output of `op`.
+
+## Reporting a bug
+
+[Open an issue](https://github.com/brentkearney/omdrop-plugin/issues) with the problem, your setup, and the evidence described above.
