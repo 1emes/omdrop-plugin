@@ -1,12 +1,6 @@
-"""Turning receiving off and on again right after a transfer must work.
+"""Turning receiving off and on again right after a transfer must work."""
 
-2026-09-18 03:11Z: an iPhone's TLS session was still open when the receiver
-stopped, so the kernel closed it with a FIN the departed phone never
-acknowledged. That socket held port 8771 in FIN_WAIT_1, `SO_REUSEADDR` does not
-cover that state, and the next start failed 23 times in a row -- the panel said
-"The AirDrop receiver would not start" while nothing was listening on the port.
-"""
-
+import errno
 import os
 import socket
 import struct
@@ -87,6 +81,32 @@ class SessionResetTests(unittest.TestCase):
         finally:
             srv.server_close()
 
+    def test_a_finished_session_does_not_hold_the_port_on_restart(self):
+        from http.server import BaseHTTPRequestHandler
+        cls = self.server()
+        with cls(("::1", 0), BaseHTTPRequestHandler) as srv:
+            port = srv.server_address[1]
+            client = socket.create_connection(("::1", port))
+            self.addCleanup(client.close)
+            conn, _ = srv.socket.accept()
+            self.addCleanup(conn.close)
+            srv.live.add(conn)
+            srv.shutdown_request(conn)
+            self.assertEqual(srv.live, set())
+
+        with cls(("::1", port), BaseHTTPRequestHandler):
+            client.settimeout(5)
+            self.assertEqual(client.recv(1), b"")
+
+    def test_a_second_listener_cannot_share_the_port(self):
+        from http.server import BaseHTTPRequestHandler
+        cls = self.server()
+        with cls(("::1", 0), BaseHTTPRequestHandler) as srv:
+            with self.assertRaises(OSError) as raised:
+                with cls(srv.server_address, BaseHTTPRequestHandler):
+                    pass
+            self.assertEqual(raised.exception.errno, errno.EADDRINUSE)
+
 
 @unittest.skipUnless(Path("/sys/class/net/awdl0/address").exists(),
                      "needs the awdl0 interface this receiver serves on")
@@ -96,6 +116,7 @@ class BusyPortTests(unittest.TestCase):
         # names the port it was given, so every sender dials a closed door.
         port = port_is_bindable()
         holder = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+        self.addCleanup(holder.close)
         holder.bind(("::", port))
         holder.listen(1)
 
@@ -115,6 +136,8 @@ class BusyPortTests(unittest.TestCase):
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
             env=dict(os.environ, HOME=str(root), XDG_CONFIG_HOME=str(root / "xdg"),
                      XDG_RUNTIME_DIR=str(root / "run")))
+        self.addCleanup(proc.stdout.close)
+        self.addCleanup(proc.wait, timeout=5)
         self.addCleanup(proc.kill)
 
         waited = self.read_until(proc, "still held", 20)

@@ -49,6 +49,8 @@ Click the icon to open the panel:
 - **They see you as** sets the name Apple devices show. It defaults to the hostname.
 - **Save files to** opens a folder chooser. It defaults to `~/Downloads`.
 
+After a transfer, you can turn receiving off and on again without waiting for the sender's connection to close.
+
 Received files are saved, copied to the clipboard, and announced in a notification. Clicking the notification opens the file.
 
 A shared link arrives as a `.url` or `.webloc` file. Clicking its notification, or double-clicking it in Files, opens it in your browser. Only `http` and `https` links open; a link to anything else, such as `file://` or `smb://`, is refused with a notification, because it was chosen by whoever sent it.
