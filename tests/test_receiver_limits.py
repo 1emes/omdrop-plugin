@@ -218,6 +218,61 @@ class StalledUploadTests(unittest.TestCase):
     def test_empty_upload_is_not_complete(self):
         self.assertFalse(self.ns["archive_is_complete"](io.BytesIO(), 10 ** 9))
 
+    def counting_reader(self, raw):
+        calls = []
+        a, b = socket.socketpair()
+        self.addCleanup(a.close)
+        self.addCleanup(b.close)
+
+        def check():
+            calls.append(1)
+            return self.ns["archive_is_complete"](raw, 10 ** 9)
+        return self.ns["PatientReader"](a.makefile("rb"), a, check), b, calls
+
+    def test_stall_inside_chunk_data_is_not_checked(self):
+        with tempfile.TemporaryFile() as raw:
+            reader, peer, calls = self.counting_reader(raw)
+            # Announce the whole body, send half of it, then go quiet.
+            peer.sendall(b"%x\r\n" % len(self.body) + self.body[:1000])
+
+            with self.assertRaises(socket.timeout):
+                self.read(raw, reader)
+            self.assertEqual(calls, [])
+
+    def test_checks_are_capped_per_upload(self):
+        with tempfile.TemporaryFile() as raw:
+            reader, peer, calls = self.counting_reader(raw)
+            half = self.body[: len(self.body) // 2]
+            step = self.ns["PatientReader"].STEP
+
+            def trickle():
+                # One small chunk per stall: every pause lands on a chunk
+                # boundary, which is where checks are allowed.
+                for i in range(5):
+                    peer.sendall(b"%x\r\n" % 100 + half[i * 100:(i + 1) * 100] + b"\r\n")
+                    time.sleep(step * 1.5)
+            threading.Thread(target=trickle, daemon=True).start()
+
+            with self.assertRaises(socket.timeout):
+                self.read(raw, reader)
+            self.assertEqual(len(calls), self.ns["PatientReader"].MAX_CHECKS)
+
+    def test_falls_back_without_private_timeout_flag(self):
+        class Raw:  # a SocketIO whose private flag was renamed
+            pass
+
+        class Reader:
+            raw = Raw()
+
+        rfile = Reader()
+        self.assertIs(self.ns["patient_reader"](rfile, None, lambda: True), rfile)
+        a, b = socket.socketpair()
+        self.addCleanup(a.close)
+        self.addCleanup(b.close)
+        real = a.makefile("rb")
+        self.assertIsInstance(self.ns["patient_reader"](real, a, lambda: True),
+                              self.ns["PatientReader"])
+
     def test_incomplete_archive_still_times_out(self):
         with tempfile.TemporaryFile() as raw:
             reader, peer = self.reader(raw)

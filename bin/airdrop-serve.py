@@ -416,6 +416,16 @@ def _read_chunked(rfile, writer, deadline):
             raise RequestBodyError('chunk data missing CRLF')
 
 
+def patient_reader(rfile, sock, is_complete):
+    """PatientReader over rfile, or rfile itself (main's behaviour: wait out
+    the idle timeout) when this Python's SocketIO isn't the one it expects."""
+    if not PatientReader.supported(rfile):
+        logging.warning('socket reader lacks _timeout_occurred; stalled uploads '
+                        'will not be checked for completeness')
+        return rfile
+    return PatientReader(rfile, sock, is_complete)
+
+
 class BodyComplete(Exception):
     """The upload went quiet, but what arrived is already a whole archive."""
 
@@ -456,21 +466,36 @@ class PatientReader:
     Over exclusive-mode AWDL (Intel Wi-Fi) the iPhone sometimes delivers every
     byte of an upload and then never sends the chunked body's closing "0"
     chunk: its progress bar sits full, and the upload used to die on the idle
-    timeout 25 KB "short" (2026-10-10, 4 of 7 receives of a 34 MB video). After
-    each quiet STEP seconds this asks is_complete(); when the archive is whole
-    it raises BodyComplete so the upload is stored and answered. Otherwise it
-    keeps waiting, up to READ_IDLE_TIMEOUT_SECONDS of silence as before."""
+    timeout 25 KB "short" (2026-10-10, 4 of 7 receives of a 34 MB video). When
+    the wait for the next chunk-size line goes quiet for STEP seconds, this
+    asks is_complete(); when the archive is whole it raises BodyComplete so the
+    upload is stored and answered. Otherwise it keeps waiting, up to
+    READ_IDLE_TIMEOUT_SECONDS of silence as before.
+
+    Each check decodes everything received so far, so it runs only at a chunk
+    boundary (where the missing closing chunk would be) and at most MAX_CHECKS
+    times per upload: a sender that keeps pausing mid-body cannot make the
+    receiver decode it over and over."""
 
     STEP = 3
+    MAX_CHECKS = 2
 
     def __init__(self, rfile, sock, is_complete):
         self.rfile = rfile
         self.sock = sock
         self.is_complete = is_complete
+        self.checks_left = self.MAX_CHECKS
 
-    def _call(self, fn, *args):
+    @staticmethod
+    def supported(rfile):
+        """Whether rfile is the CPython SocketIO this relies on. Its private
+        _timeout_occurred flag must be cleared after a timeout; if a Python
+        version renames it, every read after the first stall would fail."""
+        return hasattr(getattr(rfile, 'raw', None), '_timeout_occurred')
+
+    def _call(self, fn, *args, may_check=False):
         idle = 0
-        checked = False
+        checked = not may_check
         self.sock.settimeout(self.STEP)
         try:
             while True:
@@ -482,8 +507,9 @@ class PatientReader:
                     # and carry on (CPython socket.SocketIO, private).
                     self.rfile.raw._timeout_occurred = False
                     idle += self.STEP
-                    if not checked:
+                    if not checked and self.checks_left > 0:
                         checked = True
+                        self.checks_left -= 1
                         if self.is_complete():
                             raise BodyComplete()
                     if idle >= READ_IDLE_TIMEOUT_SECONDS:
@@ -497,7 +523,9 @@ class PatientReader:
     def _take(self, size, stop_at_newline):
         out = b''
         while len(out) < size:
-            ready = self._call(self.rfile.peek, 1)
+            # Only the first byte of a chunk-size line marks a chunk boundary.
+            ready = self._call(self.rfile.peek, 1,
+                               may_check=stop_at_newline and not out)
             if not ready:
                 break
             want = size - len(out)
@@ -975,7 +1003,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_response_only(100)
                 self.end_headers()
             with tempfile.TemporaryFile(dir=DEST) as raw:
-                patient = PatientReader(
+                patient = patient_reader(
                     self.rfile, self.request,
                     lambda: archive_is_complete(raw, receive_budget.byte_limit))
                 try:
