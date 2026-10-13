@@ -2283,8 +2283,29 @@ launch() {
 act_open() {
   local f=$1
   if is_link_file "$f"; then cmd_open_link "$f"
-  else launch xdg-open "$f"
+  else reveal_in_files "$f"
   fi
+}
+
+# Show a received file in the file manager with it selected. Nautilus is
+# Omarchy's file manager; anything else gets the folder through xdg-open, which
+# never hands a file to the browser.
+reveal_in_files() {
+  local f=$1
+  if command -v nautilus >/dev/null 2>&1; then launch nautilus --select "$f"
+  else launch xdg-open "$(dirname "$f")"
+  fi
+}
+
+# A JPEG preview for formats the notification daemon cannot decode (HEIC from
+# an iPhone). Prints the path of the preview, or nothing when none is possible.
+heic_preview() {
+  local f=$1 out dir
+  command -v heif-convert >/dev/null 2>&1 || return 0
+  dir=${XDG_CACHE_HOME:-$HOME/.cache}/omdrop
+  mkdir -p "$dir" || return 0
+  out="$dir/$(basename "${f%.*}").preview.jpg"
+  heif-convert -q 80 "$f" "$out" >/dev/null 2>&1 && [[ -s "$out" ]] && printf '%s\n' "$out"
 }
 
 # `open-link FILE`: open a link file's web page in the browser. The one entry
@@ -2542,7 +2563,12 @@ act_notify() {
   local f=$1 args=()
   copy_to_clipboard "$f"
   # Only images get a thumbnail, the way a screenshot notification does.
-  case "${f,,}" in *.png|*.jpg|*.jpeg|*.gif|*.webp|*.heic|*.avif) args+=(--image "$f") ;; esac
+  case "${f,,}" in
+    *.png|*.jpg|*.jpeg|*.gif|*.webp) args+=(--image "$f") ;;
+    *.heic|*.heif|*.avif)
+      local preview; preview=$(heic_preview "$f")
+      [[ -n "$preview" ]] && args+=(--image "$preview") ;;
+  esac
   # Same shape as omarchy-capture-screenshot: clipboard plus file, a thumbnail,
   # and the whole toast clickable. The notification service honours exactly one
   # action -- the default, fired by clicking the body -- and --exec is how
