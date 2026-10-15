@@ -2283,13 +2283,25 @@ launch() {
 act_open() {
   local f=$1
   if is_link_file "$f"; then cmd_open_link "$f"
+  elif has_default_app "$f"; then launch xdg-open "$f"
   else reveal_in_files "$f"
   fi
 }
 
-# Show a received file in the file manager with it selected. Nautilus is
-# Omarchy's file manager; anything else gets the folder through xdg-open, which
-# never hands a file to the browser.
+# Whether xdg-open has an app registered for the file's type. Without one it
+# falls back to the browser: imv registers image/heif but not image/heic, and
+# Omarchy's defaults register nothing for it, so an iPhone photo opened Chrome.
+# Without xdg-mime there is nothing to ask, and xdg-open keeps the file.
+has_default_app() {
+  command -v xdg-mime >/dev/null 2>&1 || return 0
+  local type; type=$(xdg-mime query filetype "$1" 2>/dev/null)
+  [[ -n "$type" && -n "$(xdg-mime query default "$type" 2>/dev/null)" ]]
+}
+
+# Show a received file in the file manager with it selected: the click's
+# fallback when no app is registered for the file. Nautilus is Omarchy's file
+# manager; anything else gets the folder through xdg-open, which never hands a
+# file to the browser.
 reveal_in_files() {
   local f=$1
   if command -v nautilus >/dev/null 2>&1; then launch nautilus --select "$f"
@@ -2297,15 +2309,56 @@ reveal_in_files() {
   fi
 }
 
-# A JPEG preview for formats the notification daemon cannot decode (HEIC from
-# an iPhone). Prints the path of the preview, or nothing when none is possible.
+# Previews live in the runtime dir: RAM, private to the user, and gone at
+# logout, so they never become a second copy of every photo received. Only the
+# last PREVIEW_KEEP stay -- enough for the toasts of a burst of photos to still
+# find their image. In Everyone mode the file comes from anyone nearby and is
+# decoded without a click, so each decode gets PREVIEW_TIMEOUT seconds.
+PREVIEW_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/omdrop/previews"
+PREVIEW_KEEP=10
+PREVIEW_SIZE=512
+PREVIEW_TIMEOUT=${OMDROP_PREVIEW_TIMEOUT:-10}
+
+# A small JPEG preview for formats the notification daemon cannot decode (HEIC
+# from an iPhone). Prints the path of the preview, or nothing when none is
+# possible; a failed or timed-out decode only costs the toast its thumbnail.
 heic_preview() {
-  local f=$1 out dir
+  local f=$1 out
   command -v heif-convert >/dev/null 2>&1 || return 0
-  dir=${XDG_CACHE_HOME:-$HOME/.cache}/omdrop
-  mkdir -p "$dir" || return 0
-  out="$dir/$(basename "${f%.*}").preview.jpg"
-  heif-convert -q 80 "$f" "$out" >/dev/null 2>&1 && [[ -s "$out" ]] && printf '%s\n' "$out"
+  (umask 077 && mkdir -p -- "$PREVIEW_DIR") || return 0
+  # A unique name: IMG_1.heic and IMG_1.avif, or two arrivals with the same
+  # name, each keep their own preview.
+  out=$(mktemp --suffix=.jpg "$PREVIEW_DIR/preview.XXXXXX") || return 0
+  if timeout -k 1 "$PREVIEW_TIMEOUT" heif-convert -q 80 "$f" "$out" >/dev/null 2>&1 \
+     && [[ -s "$out" ]]; then
+    shrink_preview "$out"
+    prune_previews
+    printf '%s\n' "$out"
+  else
+    # heif-convert names the images of a multi-image file out-1.jpg, out-2.jpg.
+    rm -f -- "$out" "${out%.jpg}"-*.jpg
+  fi
+}
+
+# heif-convert decodes at full size -- 4032x3024 for a 12 MP photo -- and the
+# toast shows a few hundred pixels. ImageMagick scales it down when present;
+# without it the full-size preview stays, still in RAM and still pruned.
+shrink_preview() {
+  local f=$1
+  command -v magick >/dev/null 2>&1 || return 0
+  if timeout -k 1 "$PREVIEW_TIMEOUT" magick "$f" -thumbnail "${PREVIEW_SIZE}x${PREVIEW_SIZE}>" \
+       -quality 80 "jpg:$f.part" >/dev/null 2>&1 && [[ -s "$f.part" ]]; then
+    mv -f -- "$f.part" "$f"
+  else
+    rm -f -- "$f.part"
+  fi
+}
+
+# Keep the newest PREVIEW_KEEP previews and remove the rest.
+prune_previews() {
+  find "$PREVIEW_DIR" -maxdepth 1 -type f -name 'preview.*' -printf '%T@ %p\n' 2>/dev/null \
+    | sort -rn | tail -n +$((PREVIEW_KEEP + 1)) | cut -d' ' -f2- \
+    | xargs -r -d '\n' rm -f --
 }
 
 # `open-link FILE`: open a link file's web page in the browser. The one entry

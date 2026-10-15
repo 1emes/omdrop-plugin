@@ -1,19 +1,26 @@
 """The toast for a received file: its thumbnail, and what a click opens.
 
 An iPhone sends photos as HEIC, which the notification daemon cannot decode,
-so the toast gets a JPEG preview. A click shows the file in the file manager
-rather than handing it to whatever xdg-open picks, which can be the browser.
+so the toast gets a small JPEG preview, kept in the runtime dir and pruned. A
+click opens the file with its app, and shows it in the file manager only when
+no app is registered for its type -- otherwise xdg-open picks the browser.
 """
 
 import os
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
 OMDROP = ROOT / "bin" / "omdrop"
+
+# heif-convert SRC DEST, and magick SRC ... DEST: write something to DEST, and
+# log the call. magick's DEST carries a jpg: prefix.
+HEIF_CONVERT = 'printf "heif-convert|%s\\n" "$*" >> "$LOG"; for a; do d=$a; done; printf jpeg > "$d"'
+MAGICK = 'printf "magick|%s\\n" "$*" >> "$LOG"; for a; do d=$a; done; printf small > "${d#jpg:}"'
 
 
 class NotificationFixture(unittest.TestCase):
@@ -24,18 +31,33 @@ class NotificationFixture(unittest.TestCase):
         self.bin = self.root / "bin"
         self.bin.mkdir()
         self.log = self.root / "log"
+        self.runtime = self.root / "run"
+        self.runtime.mkdir()
+        self.previews = self.runtime / "omdrop" / "previews"
         self.stub("uwsm-app", 'shift; exec "$@"')
         self.stub("nautilus", 'printf "nautilus|%s\\n" "$*" >> "$LOG"')
         self.stub("xdg-open", 'printf "xdg-open|%s\\n" "$*" >> "$LOG"')
+        # The type comes from the extension; only MIME_DEFAULTS have an app.
+        self.stub(
+            "xdg-mime",
+            'case "$2" in\n'
+            '  filetype) case "$3" in *.heic) echo image/heic ;; *.jpg) echo image/jpeg ;; esac ;;\n'
+            '  default) case " $MIME_DEFAULTS " in *" $3 "*) echo app.desktop ;; esac ;;\n'
+            "esac",
+        )
         self.stub("wl-copy", "cat >/dev/null")
         self.stub("omarchy-notification-send", 'printf "notify|%s\\n" "$*" >> "$LOG"')
+        self.stub("heif-convert", HEIF_CONVERT)
+        self.stub("magick", MAGICK)
         self.env = os.environ.copy()
         self.env.update(
             PATH=f"{self.bin}:{self.env['PATH']}",
             LOG=str(self.log),
+            MIME_DEFAULTS="image/jpeg",
             XDG_CONFIG_HOME=str(self.root / "config"),
             XDG_DATA_HOME=str(self.root / "data"),
             XDG_CACHE_HOME=str(self.root / "cache"),
+            XDG_RUNTIME_DIR=str(self.runtime),
         )
 
     def stub(self, name, body):
@@ -46,57 +68,117 @@ class NotificationFixture(unittest.TestCase):
     def run_omdrop(self, *args):
         return subprocess.run([OMDROP, *args], env=self.env, capture_output=True, text=True)
 
-    def logged(self):
-        return self.log.read_text().splitlines() if self.log.exists() else []
+    def logged(self, prefix=""):
+        lines = self.log.read_text().splitlines() if self.log.exists() else []
+        return [line for line in lines if line.startswith(prefix)]
+
+    def arrive(self, name):
+        photo = self.root / name
+        photo.write_bytes(b"photo")
+        result = self.run_omdrop("handle", str(photo))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return photo
+
+    def notified_image(self):
+        """The --image of the last toast, or None when it has none."""
+        words = self.logged("notify|")[-1].split()
+        return Path(words[words.index("--image") + 1]) if "--image" in words else None
 
 
 class ClickTests(NotificationFixture):
-    def test_a_click_shows_the_file_in_the_file_manager(self):
+    def test_a_click_opens_a_file_that_has_an_app(self):
         photo = self.root / "photo.jpg"
         photo.write_bytes(b"jpeg")
 
         result = self.run_omdrop("act", "open", str(photo))
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.logged(), [f"nautilus|--select {photo}"])
+        self.assertEqual(self.logged(), [f"xdg-open|{photo}"])
 
-
-class PreviewTests(NotificationFixture):
-    def test_a_heic_toast_carries_a_jpeg_preview(self):
-        # heif-convert SRC DEST: write something to DEST.
-        self.stub("heif-convert", 'for a; do d=$a; done; printf jpeg > "$d"')
+    def test_a_click_shows_a_file_without_an_app_in_the_file_manager(self):
         photo = self.root / "IMG_1.heic"
         photo.write_bytes(b"heic")
 
-        result = self.run_omdrop("handle", str(photo))
+        result = self.run_omdrop("act", "open", str(photo))
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        preview = self.root / "cache" / "omdrop" / "IMG_1.preview.jpg"
-        notify = [line for line in self.logged() if line.startswith("notify|")]
-        self.assertEqual(len(notify), 1, notify)
-        self.assertIn(f"--image {preview}", notify[0])
-        self.assertTrue(preview.exists())
+        self.assertEqual(self.logged(), [f"nautilus|--select {photo}"])
+
+    def test_a_click_opens_a_heic_once_an_app_is_registered_for_it(self):
+        self.env["MIME_DEFAULTS"] = "image/jpeg image/heic"
+        photo = self.root / "IMG_1.heic"
+        photo.write_bytes(b"heic")
+
+        self.run_omdrop("act", "open", str(photo))
+
+        self.assertEqual(self.logged(), [f"xdg-open|{photo}"])
+
+
+class PreviewTests(NotificationFixture):
+    def test_a_heic_toast_carries_a_small_preview_in_the_runtime_dir(self):
+        self.arrive("IMG_1.heic")
+
+        preview = self.notified_image()
+        self.assertIsNotNone(preview)
+        self.assertEqual(preview.parent, self.previews)
+        self.assertEqual(preview.suffix, ".jpg")
+        self.assertEqual(preview.read_bytes(), b"small")
+        self.assertIn("-thumbnail 512x512>", self.logged("magick|")[0])
+        self.assertFalse((self.root / "cache" / "omdrop").exists())
+
+    def test_the_preview_stays_full_size_without_imagemagick(self):
+        (self.bin / "magick").unlink()
+        self.stub("magick", "exit 127")
+
+        self.arrive("IMG_1.heic")
+
+        self.assertEqual(self.notified_image().read_bytes(), b"jpeg")
+
+    def test_previews_of_the_same_name_do_not_overwrite_each_other(self):
+        self.arrive("IMG_1.heic")
+        first = self.notified_image()
+        self.arrive("IMG_1.avif")
+        second = self.notified_image()
+
+        self.assertNotEqual(first, second)
+        self.assertTrue(first.exists())
+        self.assertTrue(second.exists())
+
+    def test_only_the_newest_previews_are_kept(self):
+        for n in range(12):
+            self.arrive(f"IMG_{n}.heic")
+            # Distinct mtimes, so the newest are unambiguous.
+            time.sleep(0.01)
+
+        kept = sorted(self.previews.iterdir())
+        self.assertEqual(len(kept), 10)
+        self.assertIn(self.notified_image(), kept)
 
     def test_a_heic_toast_still_appears_when_the_conversion_fails(self):
         self.stub("heif-convert", "exit 1")
-        photo = self.root / "IMG_2.heic"
-        photo.write_bytes(b"heic")
 
-        result = self.run_omdrop("handle", str(photo))
+        self.arrive("IMG_2.heic")
 
-        self.assertEqual(result.returncode, 0, result.stderr)
-        notify = [line for line in self.logged() if line.startswith("notify|")]
-        self.assertEqual(len(notify), 1, notify)
-        self.assertNotIn("--image", notify[0])
+        self.assertEqual(len(self.logged("notify|")), 1)
+        self.assertIsNone(self.notified_image())
+        self.assertEqual(list(self.previews.iterdir()), [])
+
+    def test_a_conversion_that_hangs_is_cut_off(self):
+        self.stub("heif-convert", "exec sleep 30")
+        self.env["OMDROP_PREVIEW_TIMEOUT"] = "1"
+
+        started = time.monotonic()
+        self.arrive("IMG_3.heic")
+
+        self.assertLess(time.monotonic() - started, 10)
+        self.assertEqual(len(self.logged("notify|")), 1)
+        self.assertIsNone(self.notified_image())
 
     def test_a_jpeg_toast_uses_the_file_itself(self):
-        photo = self.root / "photo.jpg"
-        photo.write_bytes(b"jpeg")
+        photo = self.arrive("photo.jpg")
 
-        self.run_omdrop("handle", str(photo))
-
-        notify = [line for line in self.logged() if line.startswith("notify|")]
-        self.assertIn(f"--image {photo}", notify[0])
+        self.assertEqual(self.notified_image(), photo)
+        self.assertEqual(self.logged("heif-convert|"), [])
 
 
 if __name__ == "__main__":
