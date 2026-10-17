@@ -2180,6 +2180,7 @@ cmd_watch() {
         files=("${rest%% -> *}") ;;
       *) continue ;;
     esac
+    local inline=()
     for f in "${files[@]}"; do
       f="${f#"${f%%[![:space:]]*}"}"      # trim
       f="${f%"${f##*[![:space:]]}"}"
@@ -2193,10 +2194,15 @@ cmd_watch() {
       # In its own transient unit, like `off` below: stopping this service
       # (`off`, or a one-file window closing right after this) kills its whole
       # cgroup, and a notification still decoding its preview would be lost.
-      systemd-run --user --quiet --collect "$SELF" handle "$f" >/dev/null 2>&1 \
-        || "$SELF" handle "$f" &
+      # systemd-run returns once the unit has started. Without it, handle runs
+      # here, and a one-file window waits for it before closing.
+      if ! systemd-run --user --quiet --collect "$SELF" handle "$f" >/dev/null 2>&1; then
+        "$SELF" handle "$f" &
+        inline+=("$!")
+      fi
     done
     if (( once )) && (( ${#files[@]} )); then
+      (( ${#inline[@]} )) && wait "${inline[@]}"
       # In its OWN transient unit, not in this process. `off` calls
       # cancel_window, which stops omdrop-watch.service -- this service -- and
       # systemd kills the whole cgroup, so an in-process `off` was killed
