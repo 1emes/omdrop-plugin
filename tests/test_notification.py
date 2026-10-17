@@ -164,7 +164,11 @@ class PreviewTests(NotificationFixture):
         self.assertEqual(list(self.previews.iterdir()), [])
 
     def test_a_conversion_that_hangs_is_cut_off(self):
-        self.stub("heif-convert", "exec sleep 30")
+        # Only the preview's decode hangs. The clipboard's own HEIC-to-JPEG
+        # decode (#62) has a fixed 10 s limit of its own, which this test
+        # does not measure, so it fails at once.
+        self.stub("heif-convert",
+                  'case "$4" in */omdrop/previews/*) exec sleep 30 ;; esac\nexit 1')
         self.env["OMDROP_PREVIEW_TIMEOUT"] = "1"
 
         started = time.monotonic()
