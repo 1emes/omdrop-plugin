@@ -2190,7 +2190,11 @@ cmd_watch() {
         continue
       fi
       echo "omdrop watch: announcing $f"
-      "$SELF" handle "$f" &
+      # In its own transient unit, like `off` below: stopping this service
+      # (`off`, or a one-file window closing right after this) kills its whole
+      # cgroup, and a notification still decoding its preview would be lost.
+      systemd-run --user --quiet --collect "$SELF" handle "$f" >/dev/null 2>&1 \
+        || "$SELF" handle "$f" &
     done
     if (( once )) && (( ${#files[@]} )); then
       # In its OWN transient unit, not in this process. `off` calls
@@ -2323,20 +2327,24 @@ PREVIEW_TIMEOUT=${OMDROP_PREVIEW_TIMEOUT:-10}
 # from an iPhone). Prints the path of the preview, or nothing when none is
 # possible; a failed or timed-out decode only costs the toast its thumbnail.
 heic_preview() {
-  local f=$1 out
+  local f=$1 work final
   command -v heif-convert >/dev/null 2>&1 || return 0
   (umask 077 && mkdir -p -- "$PREVIEW_DIR") || return 0
   # A unique name: IMG_1.heic and IMG_1.avif, or two arrivals with the same
-  # name, each keep their own preview.
-  out=$(mktemp --suffix=.jpg "$PREVIEW_DIR/preview.XXXXXX") || return 0
-  if timeout -k 1 "$PREVIEW_TIMEOUT" heif-convert -q 80 "$f" "$out" >/dev/null 2>&1 \
-     && [[ -s "$out" ]]; then
-    shrink_preview "$out"
+  # name, each keep their own preview. Arrivals are handled in parallel, so a
+  # preview is decoded and shrunk under working.*, and becomes preview.* --
+  # the only name pruning looks at -- once it is complete.
+  work=$(mktemp --suffix=.jpg "$PREVIEW_DIR/working.XXXXXX") || return 0
+  final="$PREVIEW_DIR/preview.${work#"$PREVIEW_DIR/working."}"
+  if timeout -k 1 "$PREVIEW_TIMEOUT" heif-convert -q 80 "$f" "$work" >/dev/null 2>&1 \
+     && [[ -s "$work" ]]; then
+    shrink_preview "$work"
+    mv -f -- "$work" "$final" || { rm -f -- "$work"; return 0; }
     prune_previews
-    printf '%s\n' "$out"
+    printf '%s\n' "$final"
   else
     # heif-convert names the images of a multi-image file out-1.jpg, out-2.jpg.
-    rm -f -- "$out" "${out%.jpg}"-*.jpg
+    rm -f -- "$work" "${work%.jpg}"-*.jpg
   fi
 }
 
@@ -2354,11 +2362,14 @@ shrink_preview() {
   fi
 }
 
-# Keep the newest PREVIEW_KEEP previews and remove the rest.
+# Keep the newest PREVIEW_KEEP finished previews and remove the rest. Files
+# another arrival is still writing are named working.* and are left alone,
+# unless a decode that was killed left one behind more than five minutes ago.
 prune_previews() {
-  find "$PREVIEW_DIR" -maxdepth 1 -type f -name 'preview.*' -printf '%T@ %p\n' 2>/dev/null \
+  find "$PREVIEW_DIR" -maxdepth 1 -type f -name 'preview.*.jpg' -printf '%T@ %p\n' 2>/dev/null \
     | sort -rn | tail -n +$((PREVIEW_KEEP + 1)) | cut -d' ' -f2- \
     | xargs -r -d '\n' rm -f --
+  find "$PREVIEW_DIR" -maxdepth 1 -type f -name 'working.*' -mmin +5 -delete 2>/dev/null
 }
 
 # `open-link FILE`: open a link file's web page in the browser. The one entry

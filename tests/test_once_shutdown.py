@@ -58,6 +58,15 @@ cmd_watch {"--once" if once else ""}
         self.assertIn("off", events, result.stdout + result.stderr)
         self.assertRegex(events, r"systemd-run .*\boff\b")
 
+    def test_the_notification_outlives_the_watcher_too(self):
+        # `handle` decodes a HEIC preview before it notifies. Inside the
+        # watcher's cgroup, the close that follows a one-file window killed
+        # it, and the photo arrived with no notification at all.
+        result, events = self.run_watch(once=True)
+        self.assertRegex(events, r"systemd-run .*\bhandle\b .*arrived\.jpg",
+                         result.stdout + result.stderr)
+        self.assertNotIn("self handle", events)
+
     def test_an_ordinary_window_is_not_closed_by_an_arrival(self):
         _, events = self.run_watch(once=False)
         self.assertNotIn("off", events)

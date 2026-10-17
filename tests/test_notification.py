@@ -154,6 +154,36 @@ class PreviewTests(NotificationFixture):
         self.assertEqual(len(kept), 10)
         self.assertIn(self.notified_image(), kept)
 
+    def test_a_preview_still_being_decoded_survives_other_arrivals(self):
+        # Arrivals are handled in parallel. One photo's preview decodes slowly
+        # while eleven others arrive and finish; their pruning must not delete
+        # the file the slow decode has already written into.
+        self.stub("heif-convert", HEIF_CONVERT + '\ncase "$3$4" in *SLOW*/omdrop/previews/*) sleep 2 ;; esac')
+        slow = self.root / "SLOW.heic"
+        slow.write_bytes(b"photo")
+        decoding = subprocess.Popen([OMDROP, "handle", str(slow)], env=self.env,
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(0.5)
+        for n in range(11):
+            self.arrive(f"IMG_{n}.heic")
+            time.sleep(0.01)
+        self.assertEqual(decoding.wait(timeout=30), 0)
+
+        preview = self.notified_image()
+        self.assertIsNotNone(preview, "the slow photo's toast lost its preview")
+        self.assertTrue(preview.exists())
+
+    def test_a_preview_left_behind_by_a_killed_decode_is_cleaned_up(self):
+        self.previews.mkdir(parents=True)
+        stale = self.previews / "working.Old456.jpg"
+        stale.write_bytes(b"half")
+        old = time.time() - 600
+        os.utime(stale, (old, old))
+
+        self.arrive("IMG_9.heic")
+
+        self.assertFalse(stale.exists())
+
     def test_a_heic_toast_still_appears_when_the_conversion_fails(self):
         self.stub("heif-convert", "exit 1")
 
